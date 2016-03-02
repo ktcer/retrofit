@@ -21,7 +21,7 @@ import java.lang.reflect.Type;
 import java.util.concurrent.Executor;
 import okhttp3.Request;
 
-final class ExecutorCallAdapterFactory implements CallAdapter.Factory {
+final class ExecutorCallAdapterFactory extends CallAdapter.Factory {
   final Executor callbackExecutor;
 
   ExecutorCallAdapterFactory(Executor callbackExecutor) {
@@ -30,7 +30,7 @@ final class ExecutorCallAdapterFactory implements CallAdapter.Factory {
 
   @Override
   public CallAdapter<Call<?>> get(Type returnType, Annotation[] annotations, Retrofit retrofit) {
-    if (Utils.getRawType(returnType) != Call.class) {
+    if (getRawType(returnType) != Call.class) {
       return null;
     }
     final Type responseType = Utils.getCallResponseType(returnType);
@@ -60,7 +60,7 @@ final class ExecutorCallAdapterFactory implements CallAdapter.Factory {
           callbackExecutor.execute(new Runnable() {
             @Override public void run() {
               if (delegate.isCanceled()) {
-                // Emulate OkHttp's behavior of throwing/delivering an IOException on cancelation
+                // Emulate OkHttp's behavior of throwing/delivering an IOException on cancellation.
                 callback.onFailure(call, new IOException("Canceled"));
               } else {
                 callback.onResponse(call, response);

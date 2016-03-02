@@ -215,15 +215,17 @@ public final class Retrofit {
 
     StringBuilder builder = new StringBuilder("Could not locate call adapter for ")
         .append(returnType)
-        .append(". Tried:");
-    for (int i = start, count = adapterFactories.size(); i < count; i++) {
-      builder.append("\n * ").append(adapterFactories.get(i).getClass().getName());
-    }
+        .append(".\n");
     if (skipPast != null) {
-      builder.append("\nSkipped:");
+      builder.append("  Skipped:");
       for (int i = 0; i < start; i++) {
-        builder.append("\n * ").append(adapterFactories.get(i).getClass().getName());
+        builder.append("\n   * ").append(adapterFactories.get(i).getClass().getName());
       }
+      builder.append('\n');
+    }
+    builder.append("  Tried:");
+    for (int i = start, count = adapterFactories.size(); i < count; i++) {
+      builder.append("\n   * ").append(adapterFactories.get(i).getClass().getName());
     }
     throw new IllegalArgumentException(builder.toString());
   }
@@ -241,8 +243,9 @@ public final class Retrofit {
    *
    * @throws IllegalArgumentException if no converter available for {@code type}.
    */
-  public <T> Converter<T, RequestBody> requestBodyConverter(Type type, Annotation[] annotations) {
-    return nextRequestBodyConverter(null, type, annotations);
+  public <T> Converter<T, RequestBody> requestBodyConverter(Type type,
+      Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
+    return nextRequestBodyConverter(null, type, parameterAnnotations, methodAnnotations);
   }
 
   /**
@@ -252,14 +255,16 @@ public final class Retrofit {
    * @throws IllegalArgumentException if no converter available for {@code type}.
    */
   public <T> Converter<T, RequestBody> nextRequestBodyConverter(Converter.Factory skipPast,
-      Type type, Annotation[] annotations) {
+      Type type, Annotation[] parameterAnnotations, Annotation[] methodAnnotations) {
     checkNotNull(type, "type == null");
-    checkNotNull(annotations, "annotations == null");
+    checkNotNull(parameterAnnotations, "parameterAnnotations == null");
+    checkNotNull(methodAnnotations, "methodAnnotations == null");
 
     int start = converterFactories.indexOf(skipPast) + 1;
     for (int i = start, count = converterFactories.size(); i < count; i++) {
+      Converter.Factory factory = converterFactories.get(i);
       Converter<?, RequestBody> converter =
-          converterFactories.get(i).requestBodyConverter(type, annotations, this);
+          factory.requestBodyConverter(type, parameterAnnotations, methodAnnotations, this);
       if (converter != null) {
         //noinspection unchecked
         return (Converter<T, RequestBody>) converter;
@@ -268,15 +273,17 @@ public final class Retrofit {
 
     StringBuilder builder = new StringBuilder("Could not locate RequestBody converter for ")
         .append(type)
-        .append(". Tried:");
-    for (int i = start, count = converterFactories.size(); i < count; i++) {
-      builder.append("\n * ").append(converterFactories.get(i).getClass().getName());
-    }
+        .append(".\n");
     if (skipPast != null) {
-      builder.append("\nSkipped:");
+      builder.append("  Skipped:");
       for (int i = 0; i < start; i++) {
-        builder.append("\n * ").append(adapterFactories.get(i).getClass().getName());
+        builder.append("\n   * ").append(converterFactories.get(i).getClass().getName());
       }
+      builder.append('\n');
+    }
+    builder.append("  Tried:");
+    for (int i = start, count = converterFactories.size(); i < count; i++) {
+      builder.append("\n   * ").append(converterFactories.get(i).getClass().getName());
     }
     throw new IllegalArgumentException(builder.toString());
   }
@@ -314,15 +321,17 @@ public final class Retrofit {
 
     StringBuilder builder = new StringBuilder("Could not locate ResponseBody converter for ")
         .append(type)
-        .append(". Tried:");
-    for (int i = start, count = converterFactories.size(); i < count; i++) {
-      builder.append("\n * ").append(converterFactories.get(i).getClass().getName());
-    }
+        .append(".\n");
     if (skipPast != null) {
-      builder.append("\nSkipped:");
+      builder.append("  Skipped:");
       for (int i = 0; i < start; i++) {
-        builder.append("\n * ").append(adapterFactories.get(i).getClass().getName());
+        builder.append("\n   * ").append(converterFactories.get(i).getClass().getName());
       }
+      builder.append('\n');
+    }
+    builder.append("  Tried:");
+    for (int i = start, count = converterFactories.size(); i < count; i++) {
+      builder.append("\n   * ").append(converterFactories.get(i).getClass().getName());
     }
     throw new IllegalArgumentException(builder.toString());
   }
@@ -337,7 +346,7 @@ public final class Retrofit {
 
     for (int i = 0, count = converterFactories.size(); i < count; i++) {
       Converter<?, String> converter =
-          converterFactories.get(i).stringConverter(type, annotations);
+          converterFactories.get(i).stringConverter(type, annotations, this);
       if (converter != null) {
         //noinspection unchecked
         return (Converter<T, String>) converter;
@@ -349,7 +358,10 @@ public final class Retrofit {
     return (Converter<T, String>) BuiltInConverters.ToStringConverter.INSTANCE;
   }
 
-  /** The executor used for {@link Callback} methods on a {@link Call}. */
+  /**
+   * The executor used for {@link Callback} methods on a {@link Call}. This may be {@code null},
+   * in which case callbacks should be made synchronously on the background thread.
+   */
   public Executor callbackExecutor() {
     return callbackExecutor;
   }
@@ -361,6 +373,7 @@ public final class Retrofit {
    * are optional.
    */
   public static final class Builder {
+    private Platform platform;
     private okhttp3.Call.Factory callFactory;
     private BaseUrl baseUrl;
     private List<Converter.Factory> converterFactories = new ArrayList<>();
@@ -368,10 +381,15 @@ public final class Retrofit {
     private Executor callbackExecutor;
     private boolean validateEagerly;
 
-    public Builder() {
+    Builder(Platform platform) {
+      this.platform = platform;
       // Add the built-in converter factory first. This prevents overriding its behavior but also
       // ensures correct behavior when using converters that consume all types.
       converterFactories.add(new BuiltInConverters());
+    }
+
+    public Builder() {
+      this(Platform.get());
     }
 
     /**
@@ -536,9 +554,14 @@ public final class Retrofit {
         callFactory = new OkHttpClient();
       }
 
+      Executor callbackExecutor = this.callbackExecutor;
+      if (callbackExecutor == null) {
+        callbackExecutor = platform.defaultCallbackExecutor();
+      }
+
       // Make a defensive copy of the adapters and add the default Call adapter.
       List<CallAdapter.Factory> adapterFactories = new ArrayList<>(this.adapterFactories);
-      adapterFactories.add(Platform.get().defaultCallAdapterFactory(callbackExecutor));
+      adapterFactories.add(platform.defaultCallAdapterFactory(callbackExecutor));
 
       // Make a defensive copy of the converters.
       List<Converter.Factory> converterFactories = new ArrayList<>(this.converterFactories);

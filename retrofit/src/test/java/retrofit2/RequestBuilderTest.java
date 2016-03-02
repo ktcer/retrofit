@@ -7,6 +7,7 @@ import java.math.BigInteger;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +19,7 @@ import okhttp3.ResponseBody;
 import okio.Buffer;
 import org.junit.Ignore;
 import org.junit.Test;
+import retrofit2.helpers.ToStringConverterFactory;
 import retrofit2.http.Body;
 import retrofit2.http.DELETE;
 import retrofit2.http.Field;
@@ -439,6 +441,24 @@ public final class RequestBuilderTest {
     }
   }
 
+  @Test public void queryMapSupportsSubclasses() {
+    class Foo extends HashMap<String, String> {
+    }
+
+    class Example {
+      @GET("/") //
+      Call<ResponseBody> method(@QueryMap Foo a) {
+        return null;
+      }
+    }
+
+    Foo foo = new Foo();
+    foo.put("hello", "world");
+
+    Request request = buildRequest(Example.class, foo);
+    assertThat(request.url().toString()).isEqualTo("http://example.com/?hello=world");
+  }
+
   @Test public void queryMapRejectsNullKeys() {
     class Example {
       @GET("/") //
@@ -647,6 +667,48 @@ public final class RequestBuilderTest {
     assertThat(request.method()).isEqualTo("GET");
     assertThat(request.headers().size()).isZero();
     assertThat(request.url().toString()).isEqualTo("http://example.com/foo/bar/po%20ng/");
+    assertThat(request.body()).isNull();
+  }
+
+  @Test public void getWithEncodedPathSegments() {
+    class Example {
+      @GET("/foo/bar/{ping}/") //
+      Call<ResponseBody> method(@Path(value = "ping", encoded = true) String ping) {
+        return null;
+      }
+    }
+    Request request = buildRequest(Example.class, "baz/pong/more");
+    assertThat(request.method()).isEqualTo("GET");
+    assertThat(request.headers().size()).isZero();
+    assertThat(request.url().toString()).isEqualTo("http://example.com/foo/bar/baz/pong/more/");
+    assertThat(request.body()).isNull();
+  }
+
+  @Test public void getWithUnencodedPathSegmentsPreventsRequestSplitting() {
+    class Example {
+      @GET("/foo/bar/{ping}/") //
+      Call<ResponseBody> method(@Path(value = "ping", encoded = false) String ping) {
+        return null;
+      }
+    }
+    Request request = buildRequest(Example.class, "baz/\r\nheader: blue");
+    assertThat(request.method()).isEqualTo("GET");
+    assertThat(request.headers().size()).isZero();
+    assertThat(request.url().toString()).isEqualTo("http://example.com/foo/bar/baz%2F%0D%0Aheader:%20blue/");
+    assertThat(request.body()).isNull();
+  }
+
+  @Test public void getWithEncodedPathStillPreventsRequestSplitting() {
+    class Example {
+      @GET("/foo/bar/{ping}/") //
+      Call<ResponseBody> method(@Path(value = "ping", encoded = true) String ping) {
+        return null;
+      }
+    }
+    Request request = buildRequest(Example.class, "baz/\r\npong");
+    assertThat(request.method()).isEqualTo("GET");
+    assertThat(request.headers().size()).isZero();
+    assertThat(request.url().toString()).isEqualTo("http://example.com/foo/bar/baz/pong/");
     assertThat(request.body()).isNull();
   }
 
@@ -1462,6 +1524,29 @@ public final class RequestBuilderTest {
     }
   }
 
+  @Test public void multipartPartMapSupportsSubclasses() throws IOException {
+    class Foo extends HashMap<String, String> {
+    }
+
+    class Example {
+      @Multipart //
+      @POST("/foo/bar/") //
+      Call<ResponseBody> method(@PartMap Foo parts) {
+        return null;
+      }
+    }
+
+    Foo foo = new Foo();
+    foo.put("hello", "world");
+
+    Request request = buildRequest(Example.class, foo);
+    Buffer buffer = new Buffer();
+    request.body().writeTo(buffer);
+    assertThat(buffer.readUtf8())
+        .contains("name=\"hello\"")
+        .contains("\r\n\r\nworld\r\n--");
+  }
+
   @Test public void multipartNullRemovesPart() throws IOException {
     class Example {
       @Multipart //
@@ -1655,6 +1740,27 @@ public final class RequestBuilderTest {
     }
   }
 
+  @Test public void fieldMapSupportsSubclasses() throws IOException {
+    class Foo extends HashMap<String, String> {
+    }
+
+    class Example {
+      @FormUrlEncoded //
+      @POST("/") //
+      Call<ResponseBody> method(@FieldMap Foo a) {
+        return null;
+      }
+    }
+
+    Foo foo = new Foo();
+    foo.put("hello", "world");
+
+    Request request = buildRequest(Example.class, foo);
+    Buffer buffer = new Buffer();
+    request.body().writeTo(buffer);
+    assertThat(buffer.readUtf8()).isEqualTo("hello=world");
+  }
+
   @Test public void simpleHeaders() {
     class Example {
       @GET("/foo/bar/")
@@ -1777,6 +1883,38 @@ public final class RequestBuilderTest {
     RequestBody body = RequestBody.create(MediaType.parse("text/plain"), "Plain");
     Request request = buildRequest(Example.class, "text/not-plain", body);
     assertThat(request.body().contentType().toString()).isEqualTo("text/not-plain");
+  }
+
+  @Test public void malformedAnnotationRelativeUrlThrows() {
+    class Example {
+      @GET("ftp://example.org")
+      Call<ResponseBody> get() {
+        return null;
+      }
+    }
+    try {
+      buildRequest(Example.class);
+      fail();
+    } catch (IllegalArgumentException e) {
+      assertThat(e).hasMessage(
+          "Malformed URL. Base: http://example.com/, Relative: ftp://example.org");
+    }
+  }
+
+  @Test public void malformedParameterRelativeUrlThrows() {
+    class Example {
+      @GET
+      Call<ResponseBody> get(@Url String relativeUrl) {
+        return null;
+      }
+    }
+    try {
+      buildRequest(Example.class, "ftp://example.org");
+      fail();
+    } catch (IllegalArgumentException e) {
+      assertThat(e).hasMessage(
+          "Malformed URL. Base: http://example.com/, Relative: ftp://example.org");
+    }
   }
 
   private static void assertBody(RequestBody body, String expected) {
